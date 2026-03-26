@@ -85,6 +85,10 @@ def load_template_module(template_path: Path):
             },
         ) from exc
     if not hasattr(module, "evaluate_one"):
+        if had_previous:
+            sys.modules[module_name] = previous_module
+        else:
+            sys.modules.pop(module_name, None)
         raise AdapterError(
             "template_missing_entry",
             "Evaluation module is unavailable. Please check backend deployment.",
@@ -190,6 +194,15 @@ def run_maseval_backend(
             auto_edit=auto_edit,
             do_after=bool(do_after),
         )
+        if not isinstance(report, dict):
+            raise AdapterError(
+                "invalid_template_result",
+                "Evaluation service did not return a valid result. Please retry.",
+                details={
+                    "template_script": str(template_path),
+                    "result_type": type(report).__name__,
+                },
+            )
 
         evaluation_result.update(
             {

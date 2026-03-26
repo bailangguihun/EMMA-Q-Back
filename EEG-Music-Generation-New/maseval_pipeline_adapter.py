@@ -70,18 +70,70 @@ def parse_json_output(stdout: str) -> Dict[str, Any]:
     return parsed
 
 
+def normalize_job_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(manifest or {})
+    artifacts = normalized.get("artifacts") if isinstance(normalized.get("artifacts"), dict) else {}
+    evaluation = normalized.get("evaluation") if isinstance(normalized.get("evaluation"), dict) else {}
+    generation = normalized.get("generation") if isinstance(normalized.get("generation"), dict) else {}
+
+    has_final_midi = isinstance(artifacts.get("final-midi"), dict)
+    if not generation:
+        if has_final_midi:
+            generation = {
+                "success": True,
+                "status": "completed",
+                "message": "Generation completed.",
+                "job_id": normalized.get("job_id"),
+            }
+        else:
+            generation = {
+                "success": False,
+                "status": "pending",
+                "message": "Generation status is pending.",
+            }
+
+    evaluation_status = str(evaluation.get("status") or "")
+    if not evaluation:
+        evaluation = {
+            "status": "idle",
+            "message": "Evaluation not started.",
+        }
+        evaluation_status = "idle"
+
+    if not normalized.get("updated_at"):
+        normalized["updated_at"] = normalized.get("created_at") or now_iso()
+
+    if not normalized.get("status"):
+        if str(generation.get("status") or "") in {"queued", "running", "error"}:
+            normalized["status"] = str(generation.get("status"))
+        elif evaluation_status in {"queued", "running"}:
+            normalized["status"] = "evaluating"
+        elif evaluation_status == "error":
+            normalized["status"] = "partial_failure"
+        elif str(generation.get("status") or "") == "completed":
+            normalized["status"] = "completed"
+        else:
+            normalized["status"] = "pending"
+
+    normalized["artifacts"] = artifacts
+    normalized["generation"] = generation
+    normalized["evaluation"] = evaluation
+    normalized["stages"] = normalized.get("stages") if isinstance(normalized.get("stages"), list) else []
+    return normalized
+
+
 def load_job_manifest(job_id: str, *, data_dir: Optional[Path] = None) -> Dict[str, Any]:
     data_root = (data_dir or DATA_DIR).resolve()
     manifest_path = data_root / "jobs" / job_id / "manifest.json"
     if not manifest_path.exists():
         raise BridgeError(f"Job not found: {job_id}")
-    return json.loads(manifest_path.read_text(encoding="utf-8"))
+    return normalize_job_manifest(json.loads(manifest_path.read_text(encoding="utf-8")))
 
 
 def write_job_manifest(job_id: str, manifest: Dict[str, Any], *, data_dir: Optional[Path] = None) -> None:
     data_root = (data_dir or DATA_DIR).resolve()
     manifest_path = data_root / "jobs" / job_id / "manifest.json"
-    write_json_atomic(manifest_path, manifest)
+    write_json_atomic(manifest_path, normalize_job_manifest(manifest))
 
 
 def resolve_artifact_path(artifact: Dict[str, Any], *, data_dir: Optional[Path] = None) -> Path:
@@ -109,19 +161,21 @@ def build_generation_result(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_generation_result_from_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
-    artifacts = manifest.get("artifacts") if isinstance(manifest.get("artifacts"), dict) else {}
+    normalized = normalize_job_manifest(manifest)
+    artifacts = normalized.get("artifacts") if isinstance(normalized.get("artifacts"), dict) else {}
     final_midi = artifacts.get("final-midi") if isinstance(artifacts.get("final-midi"), dict) else {}
+    generation = normalized.get("generation") if isinstance(normalized.get("generation"), dict) else {}
     return {
-        "success": True,
-        "status": "completed",
-        "job_id": manifest.get("job_id"),
-        "message": "Generation artifact loaded from existing job.",
+        "success": bool(generation.get("success", bool(final_midi))),
+        "status": str(generation.get("status") or ("completed" if final_midi else "pending")),
+        "job_id": normalized.get("job_id"),
+        "message": generation.get("message") or "Generation artifact loaded from existing job.",
         "final_midi": final_midi,
         "output_path": final_midi.get("relative_path") or final_midi.get("file_name"),
         "download_url": final_midi.get("download_url"),
-        "prepared": manifest.get("prepared"),
-        "estimated_key": manifest.get("estimated_key"),
-        "stages": manifest.get("stages") or [],
+        "prepared": normalized.get("prepared"),
+        "estimated_key": normalized.get("estimated_key"),
+        "stages": normalized.get("stages") or [],
     }
 
 
