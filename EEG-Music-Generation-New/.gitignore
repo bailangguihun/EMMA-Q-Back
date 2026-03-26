@@ -1,0 +1,17 @@
+﻿.api_data/
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+files/*.mid
+files/*.json
+files/*.csv.bak

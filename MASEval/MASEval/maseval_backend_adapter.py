@@ -1,0 +1,234 @@
+﻿from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import os
+import sys
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_TEMPLATE = BASE_DIR / "music_eval_v4_single_cached_fixed_v2.template.py"
+DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
+
+
+class AdapterError(RuntimeError):
+    def __init__(self, code: str, message: str, *, details: Any = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def make_error(code: str, message: str, *, details: Any = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"code": code, "message": message}
+    if details is not None:
+        payload["details"] = details
+    return payload
+
+
+def append_log(logs: List[str], message: str) -> None:
+    logs.append(f"[{now_iso()}] {message}")
+
+
+def write_log(log_path: Path, logs: List[str]) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    text = "\n".join(logs).strip()
+    if text:
+        text += "\n"
+    log_path.write_text(text, encoding="utf-8")
+
+
+def load_template_module(template_path: Path):
+    spec = importlib.util.spec_from_file_location("maseval_template_module", str(template_path))
+    if spec is None or spec.loader is None:
+        raise AdapterError("template_load_failed", f"Could not load template script: {template_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if not hasattr(module, "evaluate_one"):
+        raise AdapterError("template_missing_entry", f"Template script does not expose evaluate_one(): {template_path}")
+    return module
+
+
+def ensure_environment(*, warnings: List[str], logs: List[str]) -> None:
+    if not os.getenv("DEEPSEEK_API_KEY"):
+        raise AdapterError(
+            "missing_api_key",
+            "DEEPSEEK_API_KEY is not set. Configure it in the backend environment before running MASEval.",
+        )
+    if not os.getenv("DEEPSEEK_BASE_URL"):
+        os.environ["DEEPSEEK_BASE_URL"] = DEFAULT_BASE_URL
+        warnings.append(f"DEEPSEEK_BASE_URL was not set. Using default {DEFAULT_BASE_URL}.")
+        append_log(logs, f"DEEPSEEK_BASE_URL not set; defaulting to {DEFAULT_BASE_URL}.")
+
+
+def normalize_auto_edit(value: str) -> str:
+    cleaned = "".join(ch for ch in (value or "QNV").upper() if ch in "QNVD")
+    return cleaned or "QNV"
+
+
+def run_maseval_backend(
+    *,
+    midi_path: Path,
+    out_path: Path,
+    cache_dir: Path,
+    target_style: str,
+    intended_use: str,
+    log_file: Optional[Path] = None,
+    template_script: Optional[Path] = None,
+    model_judge: Optional[str] = None,
+    model_chair: Optional[str] = None,
+    max_measures: int = 12,
+    rule_weight: float = 0.25,
+    auto_edit: str = "QNV",
+    do_after: bool = False,
+) -> Dict[str, Any]:
+    logs: List[str] = []
+    warnings: List[str] = []
+    midi_path = midi_path.resolve()
+    out_path = out_path.resolve()
+    cache_dir = cache_dir.resolve()
+    template_path = (template_script or DEFAULT_TEMPLATE).resolve()
+    log_path = (log_file or (out_path.parent / "evaluation_backend.log")).resolve()
+    max_measures = max(1, int(max_measures))
+    auto_edit = normalize_auto_edit(auto_edit)
+
+    evaluation_result: Dict[str, Any] = {
+        "midi_path": str(midi_path),
+        "report_path": str(out_path),
+        "cache_dir": str(cache_dir),
+        "template_script": str(template_path),
+        "target_style": str(target_style),
+        "intended_use": str(intended_use),
+        "log_file": str(log_path),
+    }
+    payload: Dict[str, Any] = {
+        "success": False,
+        "status": "error",
+        "generation_result": None,
+        "evaluation_result": evaluation_result,
+        "error": None,
+        "warnings": warnings,
+    }
+
+    append_log(logs, f"Starting MASEval backend adapter for MIDI: {midi_path}")
+    append_log(logs, f"Report path: {out_path}")
+    append_log(logs, f"Cache dir: {cache_dir}")
+
+    try:
+        if not midi_path.exists() or not midi_path.is_file():
+            raise AdapterError("midi_not_found", f"MIDI file not found: {midi_path}")
+        if not template_path.exists() or not template_path.is_file():
+            raise AdapterError("template_not_found", f"Template script not found: {template_path}")
+
+        ensure_environment(warnings=warnings, logs=logs)
+        module = load_template_module(template_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        if model_judge is None:
+            model_judge = getattr(module, "DEFAULT_MODEL", "deepseek-chat")
+        if model_chair is None:
+            model_chair = getattr(module, "DEFAULT_MODEL", "deepseek-chat")
+
+        append_log(logs, f"Loaded template module from {template_path}")
+        append_log(logs, f"Using model_judge={model_judge}, model_chair={model_chair}, target_style={target_style}, intended_use={intended_use}")
+
+        report = module.evaluate_one(
+            midi_path,
+            out_path=out_path,
+            cache_dir=cache_dir,
+            model_judge=model_judge,
+            model_chair=model_chair,
+            max_measures=max_measures,
+            target_style=str(target_style),
+            intended_use=str(intended_use),
+            rule_weight=float(rule_weight),
+            auto_edit=auto_edit,
+            do_after=bool(do_after),
+        )
+
+        evaluation_result.update(
+            {
+                "report": report,
+                "report_exists": out_path.exists(),
+                "final_score_total": report.get("final_score_total"),
+                "cache_key": report.get("cache_key"),
+                "after_enabled": bool((report.get("after") or {}).get("enabled")) if isinstance(report, dict) else False,
+                "message": "Evaluation completed.",
+            }
+        )
+        append_log(logs, f"Evaluation completed. final_score_total={report.get('final_score_total')}")
+        payload.update(
+            {
+                "success": True,
+                "status": "completed",
+                "evaluation_result": evaluation_result,
+                "error": None,
+            }
+        )
+    except AdapterError as exc:
+        append_log(logs, f"Adapter error: {exc.code}: {exc}")
+        evaluation_result["message"] = str(exc)
+        payload["error"] = make_error(exc.code, str(exc), details=exc.details)
+    except SystemExit as exc:
+        message = str(exc) or "MASEval template exited unexpectedly."
+        append_log(logs, f"Template exited: {message}")
+        evaluation_result["message"] = message
+        payload["error"] = make_error("template_exit", message)
+    except Exception as exc:
+        append_log(logs, f"Unhandled error: {type(exc).__name__}: {exc}")
+        append_log(logs, traceback.format_exc())
+        evaluation_result["message"] = f"Unhandled error: {type(exc).__name__}: {exc}"
+        payload["error"] = make_error("unhandled_exception", evaluation_result["message"])
+    finally:
+        evaluation_result["log_tail"] = logs[-20:]
+        write_log(log_path, logs)
+
+    return payload
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the MASEval template through a stable JSON backend adapter.")
+    parser.add_argument("--midi", required=True)
+    parser.add_argument("--out", default="report_v2.json")
+    parser.add_argument("--cache-dir", default=".cache_music_eval_v4_stages_v2")
+    parser.add_argument("--target-style", default="general")
+    parser.add_argument("--intended-use", default="demo")
+    parser.add_argument("--log-file")
+    parser.add_argument("--template-script")
+    parser.add_argument("--model-judge")
+    parser.add_argument("--model-chair")
+    parser.add_argument("--max-measures", type=int, default=12)
+    parser.add_argument("--rule-weight", type=float, default=0.25)
+    parser.add_argument("--auto-edit", default="QNV")
+    parser.add_argument("--after", action="store_true")
+    args = parser.parse_args()
+
+    result = run_maseval_backend(
+        midi_path=Path(args.midi),
+        out_path=Path(args.out),
+        cache_dir=Path(args.cache_dir),
+        target_style=args.target_style,
+        intended_use=args.intended_use,
+        log_file=Path(args.log_file) if args.log_file else None,
+        template_script=Path(args.template_script) if args.template_script else None,
+        model_judge=args.model_judge,
+        model_chair=args.model_chair,
+        max_measures=args.max_measures,
+        rule_weight=args.rule_weight,
+        auto_edit=args.auto_edit,
+        do_after=bool(args.after),
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    raise SystemExit(0 if result.get("success") else 1)
+
+
+if __name__ == "__main__":
+    main()

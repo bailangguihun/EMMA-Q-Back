@@ -1,0 +1,226 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "maseval"
+version = "0.3.0"
+description = "A library for multi-agent systems evaluation and benchmarking."
+authors = [{ name = "Cornelius Emde", email = "cornelius@parameterlab.de" }]
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "gitpython>=3.1.0",
+    "tqdm>=4.66.0",
+    "rich>=14.1.0",
+    "pydantic>=2.10.6",
+]
+
+# Enable optional dependencies for end users
+[project.optional-dependencies]
+# Agent frameworks
+smolagents = ["smolagents>=1.21.3"]
+langgraph = ["langgraph>=0.6.0"]
+llamaindex = ["llama-index-core>=0.12.0"]
+camel = ["camel-ai>=0.2.0"]
+
+# Inference engines
+anthropic = ["anthropic>=0.40.0"]
+openai = ["openai>=1.107.2"]
+google-genai = ["google-genai>=1.37.0"]
+transformers = ["transformers>=4.37.0"]
+litellm = ["litellm>=1.0.0"]
+
+# Logging
+wandb = ["wandb>=0.15.0"]
+langfuse = ["langfuse>=3.3.4"]
+
+# Benchmarks
+gaia2 = ["meta-agents-research-environments>=1.2.0", "datasets>=3.0.0"]
+macs = []
+multiagentbench = [
+    # Core MARBLE runtime
+    "litellm>=1.0.0",
+    "pyyaml>=6.0",
+    "ruamel.yaml>=0.17.0",
+    "beartype",
+    "colorlog>=6.0.0",
+    "requests>=2.28.0",
+    # Research domain
+    "beautifulsoup4>=4.12.0",
+    "keybert>=0.8.0",
+    "arxiv>=2.1.0",
+    "pypdf2>=3.0.0",
+    "semanticscholar>=0.8.0",
+    # Coding domain
+    "levenshtein>=0.20.0",
+    # Database domain
+    "psycopg2-binary>=2.9.0",
+    "pymysql>=1.1.0",
+    # Werewolf domain
+    "names>=0.3.0",
+    # Minecraft domain
+    "flask>=3.0.0",
+    "javascript>=1!1.2.0",
+    "waitress>=3.0.0",
+    # Evaluation
+    "scikit-learn>=1.3.0",
+    # dependency of keybert. Lower versions are incompatible with huggingfacehub
+    "sentence-transformers>=2.3.0",
+]
+tau2 = ["docstring-parser>=0.16"]
+converse = []
+
+# Dependencies for running examples (only what's actually used)
+examples = [
+    "maseval[smolagents,langgraph,llamaindex,camel,anthropic,openai,google-genai,litellm,langfuse,gaia2,macs,tau2]",
+    # Additional integrations used in examples
+    "langchain>=0.3.27",
+    "langchain-google-genai>=2.1.12",
+    "typing-extensions>=4.0.0",
+    "mcp>=1.22.0",
+    "python-dotenv>=1.0.0",
+    # Jupyter notebook support
+    "jupyter>=1.0.0",
+    "ipykernel>=6.0.0",
+    "ipywidgets>=8.0.0",
+]
+
+# Complete installation with absolutely everything (uses self-reference for DRY)
+all = ["maseval[examples,transformers,wandb,multiagentbench]"]
+
+[project.urls]
+"Homepage" = "https://github.com/parameterlab/MASEval"
+"Bug Tracker" = "https://github.com/parameterlab/MASEval/issues"
+"Documentation" = "https://maseval.readthedocs.io/en/stable/"
+"Changelog" = "https://github.com/parameterlab/MASEval/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+# Development tools (linting, testing) - for contributors only
+dev = [
+    "pytest>=9.0.0",
+    "pytest-cov>=7.0.0",
+    "coverage>=7.0.0",
+    "ruff>=0.14.0",
+    "ty>=0.0.5",
+    "pre-commit>=4.0.0",
+    "respx>=0.22.0",
+]
+
+# Documentation building - for contributors only
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.7.0",
+    "mkdocstrings[python]>=1.0.0",
+    "pymdown-extensions>=10.0.0",
+    "mkdocs-jupyter>=0.24.0",
+    "mkdocs-git-revision-date-localized-plugin>=1.5.0",
+]
+
+[tool.uv]
+# ARE (meta-agents-research-environments) pins all 22 of its runtime dependencies
+# to exact versions (==), which conflicts with other extras in this project.
+# Override the most problematic pins with compatible ranges until Meta relaxes
+# their constraints upstream.
+override-dependencies = [
+    # ARE pins all deps with ==. Relax every pin to a compatible range.
+    "click>=8.1.0",
+    "datasets>=3.0.0",
+    "docstring-parser>=0.16",
+    "fsspec>=2024.12.0",
+    # # Compromise between ARE (wants >=0.28.0) and multiagentbench (needs <0.20.0)
+    # # Using >=0.19 allows 0.19.x which satisfies multiagentbench's <0.20.0 requirement
+    # # TODO: Verify ARE actually works with huggingface-hub 0.19.x (it pins to 0.28.0 originally)
+    # "huggingface-hub>=0.19",
+    "inputimeout>=1.0.4",
+    "jinja2>=3.1.0",
+    "litellm>=1.0.0",
+    "mammoth>=1.8.0",
+    "markdownify>=0.14.1",
+    "mcp>=1.11.0",
+    "numpy>=2.2.0",
+    "pandas>=2.2.0",
+    "pdfminer-six>=20231228",
+    "pillow>=10.4.0",
+    "polars-lts-cpu>=1.33.1",
+    "puremagic>=1.27",
+    "pydantic>=2.10.6",
+    "python-dotenv>=1.0.0",
+    "python-pptx>=1.0.2",
+    "rapidfuzz>=3.12.1",
+    "termcolor>=2.5.0",
+]
+
+[tool.setuptools]
+packages = ["maseval"]
+
+[tool.ruff]
+line-length = 144
+exclude = []
+
+[tool.pytest.ini_options]
+markers = [
+    "core: Core tests that don't require optional dependencies",
+    "interface: Tests that require optional dependencies (smolagents, langgraph, etc.)",
+    "contract: Cross-implementation contract tests that validate framework-agnostic abstraction",
+    "benchmark: Benchmark-specific tests (MACS, etc.) that test benchmark implementations, not core library",
+    "smolagents: Tests that specifically require smolagents",
+    "langgraph: Tests that specifically require langgraph",
+    "llamaindex: Tests that specifically require llama-index-core",
+    "gaia2: Tests that specifically require ARE (Agent Research Environments)",
+    "camel: Tests that specifically require camel-ai",
+    "live: Tests requiring network access (downloads, external APIs)",
+    "credentialed: Tests requiring API keys (implies live, costs money)",
+    "slow: Tests taking >30 seconds (data downloads, large datasets)",
+    "smoke: Full end-to-end pipeline validation (pre-release only)",
+]
+minversion = "6.0"
+addopts = "-ra -q -m 'not (slow or credentialed or smoke)'"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+relative_files = true
+source = ["maseval"]
+omit = [
+    "*/tests/*",
+    "*/examples/*",
+    "*/__pycache__/*",
+    "maseval/benchmark/multiagentbench/marble/**",
+]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "@overload",
+]
+precision = 2
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.ty.src]
+# Exclude notebooks and docs/examples from type checking
+# These contain local imports that are only valid when run from their directory
+exclude = ["docs/examples/", "examples/"]

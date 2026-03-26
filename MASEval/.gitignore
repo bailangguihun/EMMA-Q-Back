@@ -1,0 +1,15 @@
+﻿demo_eval_out/
+demo_midis/
+eval_out/
+input_midis/
+*.json
+*.log
+*.mid
+_*.bat
+MASEval/.env
+MASEval/.venv/
+MASEval/__pycache__/
+MASEval/.pytest_cache/
+MASEval/.cache_music_eval_v4*/
+MASEval/music_eval_v4_out/
+MASEval/evaluation_backend.log

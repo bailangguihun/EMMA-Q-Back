@@ -1,0 +1,81 @@
+name: Release to PyPI
+
+on:
+  push:
+    tags:
+      - "v*" # Triggers on version tags like v0.1.2
+  workflow_dispatch: # Allows manual trigger from Actions tab
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write # Required for trusted publishing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Verify version matches tag
+        run: |
+          # Check if this is a tag-triggered run
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "============================================================"
+            echo "ERROR: This workflow must be triggered from a version tag"
+            echo "============================================================"
+            echo ""
+            echo "Current ref: $GITHUB_REF"
+            echo ""
+            echo "How to fix:"
+            echo "  Option 1: Push a tag to trigger automatically"
+            echo "    git tag v0.X.X"
+            echo "    git push origin v0.X.X"
+            echo ""
+            echo "  Option 2: Use workflow_dispatch from a tag"
+            echo "    1. Go to Actions → 'Release to PyPI' → 'Run workflow'"
+            echo "    2. In 'Use workflow from' dropdown, select the TAG (e.g., v0.2.0)"
+            echo "       NOT a branch like 'main'"
+            echo "    3. Click 'Run workflow'"
+            echo "============================================================"
+            exit 1
+          fi
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          PYPROJECT_VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+
+          if [ "$TAG_VERSION" != "$PYPROJECT_VERSION" ]; then
+            echo "ERROR: Tag version ($TAG_VERSION) doesn't match pyproject.toml version ($PYPROJECT_VERSION)"
+            exit 1
+          fi
+          echo "Version check passed: $TAG_VERSION"
+
+          # Check if CHANGELOG.md has an entry for this version
+          if ! grep -q "## \[$TAG_VERSION\]" CHANGELOG.md; then
+            echo "WARNING: No CHANGELOG.md entry found for version $TAG_VERSION"
+            echo "Consider adding release notes to CHANGELOG.md"
+          fi
+
+      - name: Extract changelog for release
+        id: changelog
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          python .github/scripts/extract_changelog.py "$TAG_VERSION" > changelog_section.txt
+
+      - name: Build package
+        run: uv build
+
+      - name: Publish to PyPI
+        run: uv publish --trusted-publishing always
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*
+          body_path: changelog_section.txt
