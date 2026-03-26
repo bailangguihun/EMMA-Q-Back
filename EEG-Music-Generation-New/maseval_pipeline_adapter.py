@@ -19,6 +19,14 @@ def build_error(code: str, message: str, *, details: Any = None) -> Dict[str, An
     return payload
 
 
+def get_maseval_timeout_seconds() -> int:
+    raw_value = os.getenv("EMMAQ_MASEVAL_TIMEOUT_SECONDS", "180") or "180"
+    try:
+        return max(30, int(raw_value))
+    except Exception:
+        return 180
+
+
 def resolve_maseval_backend_script() -> Optional[Path]:
     configured = os.getenv("EMMAQ_MASEVAL_ADAPTER")
     candidates: List[Path] = []
@@ -240,7 +248,7 @@ def evaluate_generated_job(
             cwd=str(adapter_path.parent),
             capture_output=True,
             text=True,
-            timeout=int(os.getenv("EMMAQ_MASEVAL_TIMEOUT_SECONDS", "600") or "600"),
+            timeout=get_maseval_timeout_seconds(),
             check=False,
             env=os.environ.copy(),
         )

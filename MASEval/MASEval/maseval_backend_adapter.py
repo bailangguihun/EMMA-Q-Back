@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import importlib.util
+import inspect
 import json
 import os
 import sys
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_TEMPLATE = BASE_DIR / "music_eval_v4_single_cached_fixed_v2.template.py"
+DEFAULT_TEMPLATE = BASE_DIR / "music_eval_competition_light.py"
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 
 
@@ -114,6 +115,50 @@ def normalize_auto_edit(value: str) -> str:
     return cleaned or "QNV"
 
 
+def build_evaluate_kwargs(
+    evaluate_one: Any,
+    *,
+    out_path: Path,
+    cache_dir: Path,
+    model_judge: str,
+    model_chair: str,
+    max_measures: int,
+    target_style: str,
+    intended_use: str,
+    rule_weight: float,
+    auto_edit: str,
+    do_after: bool,
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {
+        "out_path": out_path,
+        "cache_dir": cache_dir,
+        "model_judge": model_judge,
+        "model_chair": model_chair,
+        "max_measures": max_measures,
+        "target_style": str(target_style),
+        "intended_use": str(intended_use),
+        "rule_weight": float(rule_weight),
+        "auto_edit": auto_edit,
+        "do_after": bool(do_after),
+    }
+    supported = inspect.signature(evaluate_one).parameters
+    return {key: value for key, value in kwargs.items() if key in supported}
+
+
+def normalize_report(report: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(report)
+    final_score_total = normalized.get("final_score_total")
+    score_total = normalized.get("score_total")
+    if final_score_total is None and score_total is not None:
+        normalized["final_score_total"] = score_total
+    if score_total is None and final_score_total is not None:
+        normalized["score_total"] = final_score_total
+    overall_comment = normalized.get("overall_comment")
+    if not isinstance(overall_comment, str):
+        normalized["overall_comment"] = ""
+    return normalized
+
+
 def run_maseval_backend(
     *,
     midi_path: Path,
@@ -125,7 +170,7 @@ def run_maseval_backend(
     template_script: Optional[Path] = None,
     model_judge: Optional[str] = None,
     model_chair: Optional[str] = None,
-    max_measures: int = 12,
+    max_measures: int = 8,
     rule_weight: float = 0.25,
     auto_edit: str = "QNV",
     do_after: bool = False,
@@ -181,8 +226,8 @@ def run_maseval_backend(
         append_log(logs, f"Loaded template module from {template_path}")
         append_log(logs, f"Using model_judge={model_judge}, model_chair={model_chair}, target_style={target_style}, intended_use={intended_use}")
 
-        report = module.evaluate_one(
-            midi_path,
+        evaluate_kwargs = build_evaluate_kwargs(
+            module.evaluate_one,
             out_path=out_path,
             cache_dir=cache_dir,
             model_judge=model_judge,
@@ -194,6 +239,7 @@ def run_maseval_backend(
             auto_edit=auto_edit,
             do_after=bool(do_after),
         )
+        report = module.evaluate_one(midi_path, **evaluate_kwargs)
         if not isinstance(report, dict):
             raise AdapterError(
                 "invalid_template_result",
@@ -203,12 +249,15 @@ def run_maseval_backend(
                     "result_type": type(report).__name__,
                 },
             )
+        report = normalize_report(report)
 
         evaluation_result.update(
             {
                 "report": report,
                 "report_exists": out_path.exists(),
                 "final_score_total": report.get("final_score_total"),
+                "score_total": report.get("score_total"),
+                "summary": report.get("overall_comment") or "",
                 "cache_key": report.get("cache_key"),
                 "after_enabled": bool((report.get("after") or {}).get("enabled")) if isinstance(report, dict) else False,
                 "message": "Evaluation completed.",
@@ -263,7 +312,7 @@ def main() -> None:
     parser.add_argument("--template-script")
     parser.add_argument("--model-judge")
     parser.add_argument("--model-chair")
-    parser.add_argument("--max-measures", type=int, default=12)
+    parser.add_argument("--max-measures", type=int, default=8)
     parser.add_argument("--rule-weight", type=float, default=0.25)
     parser.add_argument("--auto-edit", default="QNV")
     parser.add_argument("--after", action="store_true")
