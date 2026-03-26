@@ -218,6 +218,13 @@ def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.tmp")
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(path)
+
+
 def sanitize_name(value: str, fallback: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9._-]+", "_", value or "").strip("._-")
     return slug or fallback
@@ -1229,9 +1236,17 @@ def run_generation_job(preferences_payload: Optional[Dict[str, Any]], *, prefere
     if isinstance(evaluation.get("artifact"), dict):
         artifacts["evaluation-report"] = evaluation["artifact"]
 
+    generation_result = {
+        "success": True,
+        "status": "completed",
+        "message": "Generation completed.",
+        "job_id": prepared.job_id,
+    }
     manifest = {
         "job_id": prepared.job_id,
         "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "status": "completed",
         "eeg_file_name": eeg_file_name,
         "row_count": int(dataframe.shape[0]),
         "channel_count": int(channels.shape[1]),
@@ -1240,9 +1255,10 @@ def run_generation_job(preferences_payload: Optional[Dict[str, Any]], *, prefere
         "estimated_key": {"detected_root": NOTE_NAMES[int(estimated_root)], "detected_mode": estimated_mode, "applied_root": NOTE_NAMES[int(root_pc)], "applied_mode": mode},
         "artifacts": artifacts,
         "stages": stages,
+        "generation": generation_result,
         "evaluation": evaluation,
     }
-    (job_root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(job_root / "manifest.json", manifest)
     return {
         "job_id": prepared.job_id,
         "message": "Generation completed.",

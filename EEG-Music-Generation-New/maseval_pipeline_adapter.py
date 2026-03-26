@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from emmaq_generation_service import DATA_DIR, BridgeError, artifact_entry, run_generation_job
+from emmaq_generation_service import DATA_DIR, BridgeError, artifact_entry, now_iso, run_generation_job, write_json_atomic
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -81,8 +81,7 @@ def load_job_manifest(job_id: str, *, data_dir: Optional[Path] = None) -> Dict[s
 def write_job_manifest(job_id: str, manifest: Dict[str, Any], *, data_dir: Optional[Path] = None) -> None:
     data_root = (data_dir or DATA_DIR).resolve()
     manifest_path = data_root / "jobs" / job_id / "manifest.json"
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(manifest_path, manifest)
 
 
 def resolve_artifact_path(artifact: Dict[str, Any], *, data_dir: Optional[Path] = None) -> Path:
@@ -276,6 +275,13 @@ def update_manifest_with_evaluation(job_id: str, evaluation_result: Dict[str, An
         artifacts["evaluation-log"] = eval_artifacts["log"]
     manifest["artifacts"] = artifacts
     manifest["evaluation"] = evaluation_result
+    manifest["updated_at"] = now_iso()
+    if str(evaluation_result.get("status") or "") == "completed" and bool(evaluation_result.get("success")):
+        manifest["status"] = "completed"
+    elif str(evaluation_result.get("status") or "") in {"queued", "running"}:
+        manifest["status"] = "evaluating"
+    else:
+        manifest["status"] = "partial_failure"
     write_job_manifest(job_id, manifest, data_dir=data_dir)
     return manifest
 
