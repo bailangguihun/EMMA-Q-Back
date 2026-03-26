@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -45,14 +46,50 @@ def write_log(log_path: Path, logs: List[str]) -> None:
     log_path.write_text(text, encoding="utf-8")
 
 
+def build_template_module_name(template_path: Path) -> str:
+    resolved = template_path.resolve()
+    safe_stem = "".join(ch if ch.isalnum() else "_" for ch in resolved.stem).strip("_") or "template"
+    path_hash = hashlib.sha1(str(resolved).encode("utf-8")).hexdigest()[:12]
+    return f"maseval_template_{safe_stem}_{path_hash}"
+
+
 def load_template_module(template_path: Path):
-    spec = importlib.util.spec_from_file_location("maseval_template_module", str(template_path))
+    resolved_path = template_path.resolve()
+    module_name = build_template_module_name(resolved_path)
+    spec = importlib.util.spec_from_file_location(module_name, str(resolved_path))
     if spec is None or spec.loader is None:
-        raise AdapterError("template_load_failed", f"Could not load template script: {template_path}")
+        raise AdapterError(
+            "template_load_failed",
+            "Evaluation module failed to load. Please retry or check backend logs.",
+            details={"template_script": str(resolved_path), "module_name": module_name},
+        )
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    had_previous = module_name in sys.modules
+    previous_module = sys.modules.get(module_name)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        if had_previous:
+            sys.modules[module_name] = previous_module
+        else:
+            sys.modules.pop(module_name, None)
+        raise AdapterError(
+            "template_load_failed",
+            "Evaluation module failed to load. Please retry or check backend logs.",
+            details={
+                "template_script": str(resolved_path),
+                "module_name": module_name,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        ) from exc
     if not hasattr(module, "evaluate_one"):
-        raise AdapterError("template_missing_entry", f"Template script does not expose evaluate_one(): {template_path}")
+        raise AdapterError(
+            "template_missing_entry",
+            "Evaluation module is unavailable. Please check backend deployment.",
+            details={"template_script": str(resolved_path), "module_name": module_name},
+        )
     return module
 
 
@@ -175,18 +212,26 @@ def run_maseval_backend(
         )
     except AdapterError as exc:
         append_log(logs, f"Adapter error: {exc.code}: {exc}")
+        if exc.details is not None:
+            append_log(logs, f"Adapter error details: {json.dumps(exc.details, ensure_ascii=False)}")
         evaluation_result["message"] = str(exc)
         payload["error"] = make_error(exc.code, str(exc), details=exc.details)
     except SystemExit as exc:
         message = str(exc) or "MASEval template exited unexpectedly."
         append_log(logs, f"Template exited: {message}")
-        evaluation_result["message"] = message
-        payload["error"] = make_error("template_exit", message)
+        user_message = "Evaluation failed. Please retry or check backend logs."
+        evaluation_result["message"] = user_message
+        payload["error"] = make_error("template_exit", user_message, details={"raw_message": message})
     except Exception as exc:
         append_log(logs, f"Unhandled error: {type(exc).__name__}: {exc}")
         append_log(logs, traceback.format_exc())
-        evaluation_result["message"] = f"Unhandled error: {type(exc).__name__}: {exc}"
-        payload["error"] = make_error("unhandled_exception", evaluation_result["message"])
+        user_message = "Evaluation failed. Please retry or check backend logs."
+        evaluation_result["message"] = user_message
+        payload["error"] = make_error(
+            "unhandled_exception",
+            user_message,
+            details={"error_type": type(exc).__name__, "error_message": str(exc)},
+        )
     finally:
         evaluation_result["log_tail"] = logs[-20:]
         write_log(log_path, logs)
